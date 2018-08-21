@@ -1,4 +1,5 @@
 #C++面试问题汇总
+
 ##什么是虚函数？什么是纯虚函数？
 
 虚函数声明如下： virtual ReturnType FunctionName(Parameter)；引入虚函数是为了动态绑定。 
