@@ -72,8 +72,8 @@ const数据成员的初始化只能在类的构造函数的初始化列表中进
 -------------------------
 ## 如何确保对象在抛出异常时也能被删除？什么是RAII？
 #### 有两种方法：
-* RAII（局部对象管理资源的技术）：本质内容是用对象代表资源，把管理资源的任务转化为管理对象的任务，将资源的获取和释放与对象的构造和析构对应起来。RAII的做法是设计一个class，在其构造时获取对应的资源，在对象生命期内控制对资源的访问，使之始终保持有效，最后在对象析构的时候，释放构造时获取的资源。
-* 使用智能指针
+* RAII（资源获取即初始化）：本质内容是用对象代表资源，把管理资源的任务转化为管理对象的任务，将资源的获取和释放与对象的构造和析构对应起来。RAII的做法是设计一个class，在其构造时获取对应的资源，在对象生命期内控制对资源的访问，使之始终保持有效，最后在对象析构的时候，释放构造时获取的资源。
+* 使用智能指针（是RAII最具代表的实现）
 
 c++里面的四个智能指针: auto_ptr, shared_ptr, weak_ptr, unique_ptr 其中后三个是c++11支持，并且第一个已经被c++11弃用。
 
@@ -91,3 +91,119 @@ private继承与public的继承是完全不同的，主要体现在两个地方�
 
 --------------------
 ## 如果在构造函数和析构函数中抛出异常会发生什么？什么是栈展开？
+抛出异常时，将暂停当前函数的执行，开始查找匹配的catch子句。首先检查throw本身是否在try块内部，如果是，检查与该try相关的catch子句，看是否可以处理该异常。如果不能处理，就退出当前函数，并且释放当前函数的内存并销毁局部对象，继续到上层的调用函数中查找，直到找到一个可以处理该异常的catch。这个过程称为栈展开（stack unwinding）。当处理该异常的catch结束之后，紧接着该catch之后的点继续执行。
+
+#### 为局部对象调用析构函数
+如上所述，在栈展开的过程中，会释放局部对象所占用的内存并运行类类型局部对象的析构函数。但需要注意的是，如果一个块通过new动态分配内存，并且在释放该资源之前发生异常，该块因异常而退出，那么在栈展开期间不会释放该资源，编译器不会删除该指针，这样就会造成内存泄露。
+
+#### 析构函数应该从不抛出异常
+在为某个异常进行栈展开的时候，析构函数如果又抛出自己的未经处理的另一个异常，将会导致调用标准库terminate函数。通常terminate函数将调用abort函数，导致程序的非正常退出。所以析构函数应该从不抛出异常。
+
+#### 异常与构造函数
+如果在构造函数对象时发生异常，此时该对象可能只是被部分构造，要保证能够适当的撤销这些已构造的成员。因为在构造函数中抛出异常，在概念上将被视为该对象没有被成功构造，因此当前对象的析构函数就不会被调用。同时，由于构造函数本身也是一个函数，在函数体内抛出异常将导致当前函数运行结束，并释放已经构造的成员对象，包括其基类的成员，即执行直接基类和成员对象的析构函数。因此如果在构造函数中通过new动态分配了内存，并且因异常而退出，栈展开不会释放该资源，会引起内存泄漏。
+
+#### 未捕获的异常将会终止程序
+不能不处理异常。如果找不到匹配的catch，程序就会调用库函数terminate。
+
+---------------------
+## 如何在const成员函数中赋值
+在类成员函数的后面加上const：void fun() const:{}，就称为const成员函数，该函数可以操作成员，但是不可以修改数据成员的内容，假设在fun中给成员变量赋值，则会出错。const函数能被常量对象以及普通对象调用，但是常量对象只能调用const函数。
+
+想要在const成员函数中赋值，需要利用C++的一个与const相关的摆动厂：mutable（可变的）。加了mutable，说明这些成员变量可能总是会改变，即使是在const成员函数内。mutable加在变量声明处。
+
+--------------------
+## 两种常用的实现隐式类类型转换的方式是什么？如何避免隐式类型转换？
+```
+class Fruit               //定义一个类，名字叫Fruit
+{
+ string name;     //定义一个name成员           
+ string colour;   //定义一个colour成员
+ 
+public:
+ bool isSame(const Fruit &otherFruit)   //期待的形参是另一个Fruit类对象，测试是否同名
+ {
+  return name == otherFruit.name;
+ }
+ void print()              //定义一个输出名字的成员print()
+ {
+  cout<<color<<" "<<name<<endl;
+ }
+ Fruit(const string &nst,const string &cst = "green"):name(nst),colour(cst){}  //构造函数
+ 
+ Fruit(){}
+};
+
+int main()
+{
+ Fruit apple("apple");
+ Fruit orange("orange");
+ cout<<"apple = orange ?: "<<apple.isSame(orange)<<endl;  //没有问题，肯定不同
+ cout<<"apple = /"apple/" ?:"<<apple.isSame(string("apple")); //用一个string做形参？
+ 
+    return 0;
+}
+```
+你会发现最后的使用上，我们用一个string类型作一个期待Fruit类形参的函数的参数，结果竟然得出了是true（1），不要感到奇怪，这就是我现在要讲的东西，隐式类类型转换：“可以用单个实参来调用的构造函数定义了从形参类型到该类型的一个隐式转换。”（C++ Primer)首先要单个实参，你可以把构造函数colour的默认实参去掉，也就是定义一个对象必须要两个参数的时候，文件编译不能通过。然后满足这个条件后，系统就知道怎么转换了，不过这里比较严格：）以前我们构造对象的时候Fruit apple("apple")其实也已经有了一个转换,从const char *的C字符串格式，转为string，在这里，你再apple.isSame("apple")的话，蠢系统不懂得帮你转换两次，所以你必须要用string（）来先强制转换，然后系统才知道帮你从string隐式转换为Fruit，当然其实你自己也可以帮他完成。cout<<"apple = /"apple/" ?:"<<apple.isSame(Fruit("apple"));这样。参考例子1.2 ：Fruit apple = Fruit("apple");  //定义一个Fruit类对象apple。也就是这样转换的。不过这就叫显式转换了，我们不标出来，系统帮我们完成的，叫隐式的贝。这里要说的是，假如你显示转换就可以不管有多少参数了，比如在前面提到的必须需要两个参数的构造函数时的例子。
+
+```
+class Fruit               //定义一个类，名字叫Fruit
+{
+ string name;     //定义一个name成员           
+ string colour;   //定义一个colour成员
+ 
+public:
+ bool isSame(const Fruit &otherFruit)   //期待的形参是另一个Fruit类对象，测试是否同名
+ {
+  return name == otherFruit.name;
+ }
+ void print()              //定义一个输出名字的成员print()
+ {
+  cout<<colour<<" "<<name<<endl;
+ }
+ Fruit(const string &nst,const string &cst):name(nst),colour(cst){}  //构造函数
+ 
+ Fruit(){}
+};
+
+int main()
+{
+ Fruit apple("apple","green");
+ Fruit orange("orange","yellow");
+ cout<<"apple = orange ?: "<<apple.isSame(orange)<<endl;  //没有问题，肯定不同
+ cout<<"apple = /"apple/" ?:"<<apple.isSame(Fruit("apple","green")); //显式转换 
+    return 0;
+}
+```
+在你不想隐式转换，以防用户误操作怎么办？C++提供了一种抑制构造函数隐式转换的办法，就是在构造函数前面加explicit关键字，你试试就知道，那时你再希望隐式转换就会导致编译失败，但是，要说明的是，显式转换还是可以进行。
+
+第二种方法是使用operator what_you_want_to_convert_type() const
+```
+ class A
+        {
+        public:
+                operator char*() const
+                {
+                    return data;//当从其他类型转换到char*时自动调用
+                }
+        private:
+                char* data;
+        };
+```
+
+再谈一谈C++中的类型转换
+C++中共有四种类型转换的方式：static_cast 、dynamic_cast、 reindivter_cast、 const_cast
+
+#### static_cast
+用法：static_cast < type-id > ( exdivssion ) 
+* 用于类层次结构中基类和子类之间指针或引用的转换。进行上行转换（把子类的指针或引用转换成基类表示）是安全的；进行下行转换（把基类指针或引用转换成子类表示）时，由于没有动态类型检查，所以是不安全的。
+* 用于基本数据类型之间的转换，如把int转换成char，把int转换成enum。这种转换的安全性也要开发人员来保证。
+* 把空指针转换成目标类型的空指针。
+* 把任何类型的表达式转换成void类型。
+
+#### dynamic_cast
+用法：dynamic_cast < type-id > ( exdivssion )
+该运算符把exdivssion转换成type-id类型的对象。Type-id必须是类的指针、类的引用或者void *；如果type-id是类指针类型，那么exdivssion也必须是一个指针，如果type-id是一个引用，那么exdivssion也必须是一个引用。dynamic_cast主要用于类层次间的上行转换和下行转换，还可以用于类之间的交叉转换。在类层次间进行上行转换时，dynamic_cast和static_cast 的效果是一样的；在进行下行转换时，dynamic_cast具有类型检查的功能，比static_cast 更安全。
+
+#### 上行转换与下行转换
+指针类型可以分为两种：指向父类的指针和指向子类的指针，简称为父指针和子指针。以及两种对象:父类对象和子类对象。因此会出现四种情况：父指针指向父对象，父指针指向子对象（虚函数、多态）；子指针指向父对象（危险，因为子指针可以调用子类的方法，但是子指针指向的父对象中没有子类的方法，因此会出错），子指针指向子对象。针对上行转换而言，是将子指针变成父指针，而父指针无论指向父对象还是子对象都是安全的，因此上行转换是安全的的；针对下行转换而言，是将父指针变成子指针，而子指针指向父对象是很危险的，因此下行转换会有一定的危险。
+
